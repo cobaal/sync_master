@@ -48,6 +48,9 @@ class StateFinder(object):
 			if data[0] == 'pub':
 				## registerPublisher(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
 				print(self.my_master.registerPublisher(data[1], data[2], data[3], data[4]))
+			elif data[0] == 'sub':
+				## registerSubscriber(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
+				print(self.my_master.registerSubscriber(data[1], data[2], data[3], data[4]))
 
 	def state_finder_thread(self):
 		##
@@ -76,16 +79,17 @@ class StateFinder(object):
 		for node_name in node_names:
 			node_uri = self._succeed(self.my_master.lookupNode(self.my_node_name, node_name))
 			# node_uri = self.my_master.lookupNode(node_name)
-			node_pid = -1
-			if self.is_local_node(self.my_node_uri, node_uri):
-				node_api = xmlrpcclient.ServerProxy(node_uri)	# Useless til now...
-				node_pid = self._succeed(node_api.getPid(node_name))
-			if not node_name in self.nodes.keys() or self.nodes[node_name].isDuplicated(node_name, node_uri, node_pid) == False:
-				print("NEW NODE : " + node_name + "\t" + node_uri)
-				self.nodes[node_name] = NodeInfo(node_name, node_uri, node_pid)		
-			# else:
-			# 	print(node_name + '\t: is duplicated!')	
-		
+
+			# if self.is_local_node(self.my_node_uri, node_uri):
+			# 	node_api = xmlrpcclient.ServerProxy(node_uri)
+			# 	node_pid = self._succeed(node_api.getPid(node_name))
+
+			if not node_name in self.nodes.keys() or self.nodes[node_name].isDuplicated(node_name, node_uri) == False:
+				print("[ NEW NODE    ]\t*NAME: " + node_name + "\n\t\t*URI : " + node_uri + "\n")
+				self.nodes[node_name] = NodeInfo(node_name, node_uri)	
+				if self.is_local_node(self.my_node_uri, node_uri):
+					self.nodes[node_name].isLocal = True	
+			
 		##
 		#  GETTING TOPIC NAME NAD TYPE LIST OF THIS DEVICE
 		#  [[TOPIC_NAME, TOPIC_TYPE], ...] FROM getTopicTypes() 
@@ -108,10 +112,9 @@ class StateFinder(object):
 		for topic_name, pub_nodes in state[0]:
 			for pub_node in pub_nodes:
 				if self.nodes[pub_node].addPublishedTopics(topic_name, topic_type_list[topic_name]) == 0:
-					print("NEW PUB TOPIC! : " + pub_node + "\t" + topic_name + "(" + topic_type_list[topic_name] + ")")
-					if self.nodes[pub_node].node_pid != -1 and topic_name != '/rosout' and topic_name != '/rosout_agg':
+					print("[   NEW TOPIC ]\t*NODE:  " + pub_node + " (Publisher)\n\t\t*TOPIC: " + topic_name + " (type: " + topic_type_list[topic_name] + ")\n")
+					if self.nodes[pub_node].isLocal == True and topic_name != '/rosout' and topic_name != '/rosout_agg':
 						data = ['pub', pub_node, topic_name, topic_type_list[topic_name], self.nodes[pub_node].node_uri]
-						print("\t(pub)\t" + str(data))
 						payload = pickle.dumps(data)
 						self.sendMulticastMsg(payload)
 
@@ -119,10 +122,9 @@ class StateFinder(object):
 		for topic_name, sub_nodes in state[1]:
 			for sub_node in sub_nodes:
 				if self.nodes[sub_node].addSubscribedTopics(topic_name, topic_type_list[topic_name]) == 0:
-					print("NEW SUB TOPIC! : " + sub_node + "\t" + topic_name + "(" + topic_type_list[topic_name] + ")")
-					if self.nodes[sub_node].node_pid != -1 and topic_name != '/rosout' and topic_name != '/rosout_agg':
+					print("[   NEW TOPIC ]\t*NODE:  " + sub_node + " (Subscriber)\n\t\t*TOPIC: " + topic_name + " (type: " + topic_type_list[topic_name] + ")\n")
+					if self.nodes[sub_node].isLocal == True and topic_name != '/rosout' and topic_name != '/rosout_agg':
 						data = ['sub', sub_node, topic_name, topic_type_list[topic_name], self.nodes[sub_node].node_uri]
-						print("\t(sub)\t" + str(data))
 						payload = pickle.dumps(data)
 						self.sendMulticastMsg(payload)
 

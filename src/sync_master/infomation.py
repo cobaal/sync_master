@@ -7,10 +7,11 @@ except ImportError:
 	import xmlrpc.client as xmlrpcclient
 
 class NodeInfo(object):
-	def __init__(self, node_name, node_uri, node_pid):
+	def __init__(self, node_name, node_uri):
 		self._node_name = node_name
 		self._node_uri = node_uri
-		self._node_pid = node_pid
+		self._node_pid = -1
+		self._isLocal = False
 		self._publishedTopics = {}
 		self._subscribedTopics = {}
 		self._services = []
@@ -28,6 +29,18 @@ class NodeInfo(object):
 	def node_pid(self):
 		return self._node_pid
 
+	@node_pid.setter
+	def node_pid(self, node_pid):
+		self._node_pid = node_pid
+
+	@property
+	def isLocal(self):
+		return self._isLocal
+
+	@isLocal.setter
+	def isLocal(self, isLocal):
+		self._isLocal = isLocal
+
 	@property
 	def publishedTopics(self):
 		return self._publishedTopics
@@ -43,12 +56,26 @@ class NodeInfo(object):
 			self._publishedTopics[topic_name] = topic_type
 			return 0
 
+	def delPublishedTopics(self, topic_name):
+		if topic_name in self._publishedTopics.keys():
+			del self._publishedTopics[topic_name]
+			return 0
+		else:
+			return -1
+
 	def addSubscribedTopics(self, topic_name, topic_type):
 		if topic_name in self._subscribedTopics.keys() and topic_type in self._subscribedTopics.values():
 			return -1
 		else:
 			self._subscribedTopics[topic_name] = topic_type
 			return 0
+
+	def delSubscribedTopics(self, topic_name):
+		if topic_name in self._subscribedTopics.keys():
+			del self._subscribedTopics[topic_name]
+			return 0
+		else:
+			return -1
 
 	@property
 	def services(self):
@@ -65,8 +92,8 @@ class NodeInfo(object):
 		except ValueError:
 			self._services.append(name)
 
-	def isDuplicated(self, node_name, node_uri, node_pid):
-		if self._node_name == node_name and self._node_uri == node_uri and self._node_pid == node_pid:
+	def isDuplicated(self, node_name, node_uri):
+		if self._node_name == node_name and self._node_uri == node_uri:
 			return True
 		else:
 			return False				
