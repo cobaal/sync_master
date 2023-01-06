@@ -12,6 +12,7 @@ class NodeInfo(object):
 		self._node_uri = node_uri
 		self._node_pid = -1
 		self._isLocal = False
+		self._isFiltered = False
 		self._publishedTopics = {}
 		self._subscribedTopics = {}
 		self._services = []
@@ -40,6 +41,14 @@ class NodeInfo(object):
 	@isLocal.setter
 	def isLocal(self, isLocal):
 		self._isLocal = isLocal
+
+	@property
+	def isFiltered(self):
+		return self._isFiltered
+
+	@isFiltered.setter
+	def isFiltered(self, isFiltered):
+		self._isFiltered = isFiltered
 
 	@property
 	def publishedTopics(self):
