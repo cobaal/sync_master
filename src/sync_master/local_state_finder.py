@@ -24,6 +24,7 @@ class StateFinder(object):
 		self.timer_interval = 1
 		self.node_list = []
 		self.nodes = {}
+		# self.pubs = {}
 
 		self.MCAST_GRP = '224.1.1.1'
 		self.MCAST_PORT = 5007
@@ -61,28 +62,28 @@ class StateFinder(object):
 			
 
 	def state_finder_thread(self):
-		##
-		#  GETTING MASTER API OF THIS NODE (I.E., SYNC_MASTER NODE'S MASTER OBJECT)
-		#  GETTING THIS NODE URI
-		##
+		'''
+		* GETTING MASTER API OF THIS NODE (I.E., SYNC_MASTER NODE'S MASTER OBJECT)
+		* GETTING THIS NODE URI
+		'''
 		self.my_master = xmlrpcclient.ServerProxy("http://localhost:11311")
 		self.my_node_uri = self._succeed(self.my_master.lookupNode(self.my_node_name, self.my_node_name))
 		# self.my_master = rosgraph.Master("")
 		# self.my_node_uri = self.my_master.lookupNode(self.my_node_name)
 
-		##
-		#  GETTING LIST OF NODES IN THIS MASTER INCLUDING OTHER NODES OBTAINED FROM OTHER MASTERS
-		#  CATCHING THE CHANGES IN NODE (NEW/REMOVE)
-		#  NodeInfo class
-		#    - node_name
-		#    - node_uri
-		#    - node_pid
-		#    - isLocal			: False (default)
-		#    - isFiltered		: False (default)
-		#    - publishedTopics	: dict[TOPIC_NAME] = TOPIC_TYPE
-		#    - subscribedTopics	: dict[TOPIC_NAME] = TOPIC_TYPE
-		#    - service
-		##
+		'''
+		* GETTING LIST OF NODES IN THIS MASTER INCLUDING OTHER NODES OBTAINED FROM OTHER MASTERS
+		* CATCHING THE CHANGES IN NODE (NEW/REMOVE)
+		:NodeInfo class
+			- node_name
+			- node_uri
+			- node_pid
+			- isLocal			: False (default)
+			- isFiltered		: False (default)
+			- publishedTopics	: dict[TOPIC_NAME] = TOPIC_TYPE
+			- subscribedTopics	: dict[TOPIC_NAME] = TOPIC_TYPE
+			- service
+		'''
 		node_names = rosnode.get_node_names()
 		new_nodes = set(node_names) - set(self.node_list)
 
@@ -125,22 +126,22 @@ class StateFinder(object):
 		# SAVE NODE LIST
 		self.node_list = node_names
 			
-		##
-		#  GETTING TOPIC NAME NAD TYPE LIST OF THIS DEVICE
-		#  [[TOPIC_NAME, TOPIC_TYPE], ...] FROM getTopicTypes() 
-		#  TOPIC TYPE DICT : DICT[TOPIC_NAME] = TOPIC_TYPE
-		##
+		'''
+		* GETTING TOPIC NAME NAD TYPE LIST OF THIS DEVICE
+		* [[TOPIC_NAME, TOPIC_TYPE], ...] FROM getTopicTypes() 
+		* TOPIC TYPE DICT : DICT[TOPIC_NAME] = TOPIC_TYPE
+		'''
 		topic_type_list = {}
 		topic_types = self._succeed(self.my_master.getTopicTypes(self.my_node_name))
 		# topic_types = self.my_master.getTopicTypes()
 		for topic_name, topic_type in topic_types:
 			topic_type_list[topic_name] = topic_type
 
-		##
-		#  GETTING STATE OF THIS LOCAL MASTER FROM getSystemState()
-		#  [0] : PUBLISHED TOPIC	[[TOPIC_NAME, [PUBLISHER_1, PUBLISHER_2, ...]], ...]
-		#  [1] : SUBSCRIBED TOPIC	[[TOPIC_NAME, [SUBSCRIBER_1, SUBSCRIBER_2, ...]], ...]
-		##
+		'''
+		* GETTING STATE OF THIS LOCAL MASTER FROM getSystemState()
+		* [0] : PUBLISHED TOPIC		[[TOPIC_NAME, [PUBLISHER_1, PUBLISHER_2, ...]], ...]
+		* [1] : SUBSCRIBED TOPIC	[[TOPIC_NAME, [SUBSCRIBER_1, SUBSCRIBER_2, ...]], ...]
+		'''
 		state = self._succeed(self.my_master.getSystemState(self.my_node_name))
 		# state = self.my_master.getSystemState()
 
@@ -169,6 +170,34 @@ class StateFinder(object):
 						self.sendMulticastMsg(payload)
 
 		# TODO : Find the unpub and unsub topics of which the nodes are still alived.
+
+		# pub_nodes = {}
+		# for topic_name, nodes in state[0]:
+		# 	pub_nodes[topic_name] = nodes
+
+		# # NEW PUB TOPICS
+		# new_pub_topics = set(pub_nodes.keys()) - set(self.pubs.keys())
+		# for topic_name in new_pub_topics:
+		# 	for pub_node in pub_nodes.values():
+		# 		print("[ tests    NEW ]\t*NODE:  " + pub_node + " (Publisher)\n[       TOPIC ]\t*TOPIC: " + topic_name + " (type: " + topic_type_list[topic_name] + ")\n")
+
+		# # REMOVED PUB TOPICS
+		# removed_pub_topics = set(self.pubs.keys()) - set(pub_nodes.keys())
+		# print(removed_pub_topics)
+
+		# for topic in set(pub_nodes.keys()) & set(self.pubs.keys()):
+		# 	# NEW PUBLISHERS
+		# 	new_publishers = set(self.pubs[topic]) - set(pub_nodes[topic])
+
+		# 	# REMOVED PUBLISHERS
+		# 	removed_publishers = set(pub_nodes[topic])- set(self.pubs[topic])
+
+		# 	print(new_publishers)
+		# 	print(removed_publishers)
+			
+
+		# # SAVE PUB TOPICS
+		# self.pubs = pub_nodes
 
 		# print("")
 		# for node in self.nodes.values():
