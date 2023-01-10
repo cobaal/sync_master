@@ -15,7 +15,7 @@ class NodeInfo(object):
 		self._isFiltered = False
 		self._publishedTopics = {}
 		self._subscribedTopics = {}
-		self._services = []
+		self._services = {}
 
 
 	@property
@@ -90,16 +90,23 @@ class NodeInfo(object):
 	def services(self):
 		return self._services
 
-	@services.setter
-	def services(self, name):
-		try:
-			if isinstance(name, list):
-				del self._services
-				self._services = name
-			else:
-				self._services.index(name)
-		except ValueError:
-			self._services.append(name)
+	# @services.setter
+	# def services(self, name):
+	# 	try:
+	# 		if isinstance(name, list):
+	# 			del self._services
+	# 			self._services = name
+	# 		else:
+	# 			self._services.index(name)
+	# 	except ValueError:
+	# 		self._services.append(name)
+
+	def addService(self, service_name, service_uri):
+		if service_name in self._services.keys() and service_uri in self._services.values():
+			return -1
+		else:
+			self._services[service_name] = service_uri
+			return 0
 
 	def isDuplicated(self, node_name, node_uri):
 		if self._node_name == node_name and self._node_uri == node_uri:

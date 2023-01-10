@@ -59,6 +59,12 @@ class StateFinder(object):
 			elif data[0] == 'usub':
 				## unregisterSubscriber(NODE_NAME, TOPIC_NAME, NODE_URI)
 				print(self.my_master.unregisterSubscriber(data[1], data[2], data[3]))
+			elif data[0] == 'service':
+				## registerService(NODE_NAME, SERVICE_NAME, SERVICE_URI, NODE_URI)
+				print(self.my_master.registerService(data[1], data[2], data[3], data[4]))
+			elif data[0] == 'uservice':
+				## unregisterService(NODE_NAME, SERVICE_NAME, SERVICE_URI)
+				print(self.my_master.unregisterService(data[1], data[2], data[3]))
 			
 
 	def state_finder_thread(self):
@@ -82,7 +88,7 @@ class StateFinder(object):
 			- isFiltered		: False (default)
 			- publishedTopics	: dict[TOPIC_NAME] = TOPIC_TYPE
 			- subscribedTopics	: dict[TOPIC_NAME] = TOPIC_TYPE
-			- service
+			- service			: dict[SERVICE_NAME] = SERVICE_URI
 		'''
 		node_names = rosnode.get_node_names()
 		new_nodes = set(node_names) - set(self.node_list)
@@ -105,7 +111,7 @@ class StateFinder(object):
 			node_uri = self.nodes[node_name].node_uri
 			print("[ REMOVED     ]\t*NAME: " + node_name + "\n[ NODE        ]\t*URI : " + node_uri + "\n")
 
-			# DELETE REMOVED TOPICS AND SEND MESSAGE
+			# DELETE REMOVED PUB/SUB TOPICS, AND SERVICES. SEND MESSAGE
 			if self.nodes[node_name].isLocal == True:
 				# UNPUBLISH
 				for topic_name in self.nodes[node_name].publishedTopics.keys():
@@ -117,6 +123,12 @@ class StateFinder(object):
 				for topic_name in self.nodes[node_name].subscribedTopics.keys():
 					print("[     REMOVED ]\t*NODE:  " + node_name + " (Subscriber)\n[       TOPIC ]\t*TOPIC: " + topic_name + "\n")
 					data = ['usub', node_name, topic_name, self.nodes[node_name].node_uri]
+					payload = pickle.dumps(data)
+					self.sendMulticastMsg(payload)
+				# UNSERVICE
+				for service_name in self.nodes[node_name].services.keys():
+					print("[   REMOVED   ]\t*NODE:    " + node_name + " \n[   SERVICE   ]\t*SERVICE: " + service_name + "\n")
+					data = ['uservice', node_name, service_name, self.nodes[node_name].services[service_name]]
 					payload = pickle.dumps(data)
 					self.sendMulticastMsg(payload)
 			
@@ -141,6 +153,7 @@ class StateFinder(object):
 		* GETTING STATE OF THIS LOCAL MASTER FROM getSystemState()
 		* [0] : PUBLISHED TOPIC		[[TOPIC_NAME, [PUBLISHER_1, PUBLISHER_2, ...]], ...]
 		* [1] : SUBSCRIBED TOPIC	[[TOPIC_NAME, [SUBSCRIBER_1, SUBSCRIBER_2, ...]], ...]
+		* [2] : SERVICE				[[SERVICE_NAME, [NODE_1, NODE_2, ...]], ...]
 		'''
 		state = self._succeed(self.my_master.getSystemState(self.my_node_name))
 		# state = self.my_master.getSystemState()
@@ -148,7 +161,7 @@ class StateFinder(object):
 		# STATE OF PUBLISHERS
 		for topic_name, pub_nodes in state[0]:
 			for pub_node in pub_nodes:
-				# CHECK THE OVERLAP TOPICS
+				# CHECK THE OVERLAP PUB TOPICS
 				if self.nodes[pub_node].addPublishedTopics(topic_name, topic_type_list[topic_name]) == 0:
 					print("[         NEW ]\t*NODE:  " + pub_node + " (Publisher)\n[       TOPIC ]\t*TOPIC: " + topic_name + " (type: " + topic_type_list[topic_name] + ")\n")
 					# SEND MESSAGE
@@ -160,7 +173,7 @@ class StateFinder(object):
 		# STATE OF SUBSCRIBERS
 		for topic_name, sub_nodes in state[1]:
 			for sub_node in sub_nodes:
-				# CHECK THE OVERLAP TOPICS
+				# CHECK THE OVERLAP SUB TOPICS
 				if self.nodes[sub_node].addSubscribedTopics(topic_name, topic_type_list[topic_name]) == 0:
 					print("[         NEW ]\t*NODE:  " + sub_node + " (Subscriber)\n[       TOPIC ]\t*TOPIC: " + topic_name + " (type: " + topic_type_list[topic_name] + ")\n")
 					# SEND MESSAGE
@@ -171,6 +184,19 @@ class StateFinder(object):
 
 		# TODO : Find the unpub and unsub topics of which the nodes are still alived.
 
+		# STATE OF SERVICES
+		for service_name, service_nodes in state[2]:
+			for service_node in service_nodes:
+				# CHECK THE OVERLAP SERVICES
+				service_uri = self._succeed(self.my_master.lookupService(self.my_node_name, service_name))
+				if self.nodes[service_node].addService(service_name, service_uri) == 0:
+					print("[     NEW     ]\t*NODE:    " + service_node + "\n[   SERVICE   ]\t*SERVICE: " + service_name + "\n\t\t (" + service_uri + ")\n")
+					# SEND MESSAGE
+					if self.nodes[service_node].isLocal == True and self.nodes[service_node].isFiltered == False:
+						data = ['service', service_node, service_name, service_uri, self.nodes[sub_node].node_uri]
+						payload = pickle.dumps(data)
+						self.sendMulticastMsg(payload)
+						
 		# pub_nodes = {}
 		# for topic_name, nodes in state[0]:
 		# 	pub_nodes[topic_name] = nodes
