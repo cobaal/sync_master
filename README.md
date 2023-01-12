@@ -8,6 +8,6 @@ sudo chmod +x ~/catkin_ws/src/sync_master/nodes/sync_master_node
 cd ~/catkin_ws
 catkin_make
 
-rospack depends1 symc_master
+rospack depends1 sync_master
 rosrun sync_master sync_master_node
 ~~~
