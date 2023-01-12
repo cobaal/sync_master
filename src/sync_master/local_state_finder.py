@@ -25,9 +25,17 @@ class StateFinder(object):
 		self.node_list = []
 		self.nodes = {}
 
+		# FOR MULTICAST SOCKET
 		self.MCAST_GRP = '224.1.1.1'
 		self.MCAST_PORT = 5007
 		self.MCAST_TTL = 1
+
+		self.msock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+		self.msock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.MCAST_TTL)
+		self.msock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+
+		# FOR UNICAST SOCKET
+		self.UCAST_PORT = 3001
 
 		'''
 		* GETTING MASTER API OF THIS NODE (I.E., SYNC_MASTER NODE'S MASTER OBJECT)
@@ -69,7 +77,17 @@ class StateFinder(object):
 			elif data[0] == 'uservice':
 				## unregisterService(NODE_NAME, SERVICE_NAME, SERVICE_URI)
 				print(self.my_master.unregisterService(data[1], data[2], data[3]))
+			elif data[0] == 'req':
+				print(data[1])
+				# TODO : RESPONSE MY LOCAL MASTER URI (EX. HTTP://{IP}:11311) OR MY LOCAL IP
 			
+	def sync_adjacent_master(self):
+		# MULTICASTING SYNC REQ SIGNAL
+		data = ['req', self.my_node_uri.split('/')[2].split(':')[0]]
+		payload = pickle.dumps(data)
+		self.msock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
+
+		# TODO : RECEIVE UNICAST MESSAGE - ADJACENT MASTER'S URI
 
 	def state_finder_thread(self):
 		'''
@@ -107,25 +125,25 @@ class StateFinder(object):
 			print("[ REMOVED     ]\t*NAME: " + node_name + "\n[ NODE        ]\t*URI : " + node_uri + "\n")
 
 			# DELETE REMOVED PUB/SUB TOPICS, AND SERVICES. SEND MESSAGE
-			if self.nodes[node_name].isLocal == True:
+			if self.nodes[node_name].isLocal == True and self.nodes[node_name].isFiltered == False:
 				# UNPUBLISH
 				for topic_name in self.nodes[node_name].publishedTopics.keys():
 					print("[     REMOVED ]\t*NODE:  " + node_name + " (Publisher)\n[       TOPIC ]\t*TOPIC: " + topic_name + "\n")
 					data = ['upub', node_name, topic_name, self.nodes[node_name].node_uri]
 					payload = pickle.dumps(data)
-					self.sendMulticastMsg(payload)
+					self.msock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
 				# UNSUBSCRIBE
 				for topic_name in self.nodes[node_name].subscribedTopics.keys():
 					print("[     REMOVED ]\t*NODE:  " + node_name + " (Subscriber)\n[       TOPIC ]\t*TOPIC: " + topic_name + "\n")
 					data = ['usub', node_name, topic_name, self.nodes[node_name].node_uri]
 					payload = pickle.dumps(data)
-					self.sendMulticastMsg(payload)
+					self.msock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
 				# UNSERVICE
 				for service_name in self.nodes[node_name].services.keys():
 					print("[   REMOVED   ]\t*NODE:    " + node_name + " \n[   SERVICE   ]\t*SERVICE: " + service_name + "\n")
 					data = ['uservice', node_name, service_name, self.nodes[node_name].services[service_name]]
 					payload = pickle.dumps(data)
-					self.sendMulticastMsg(payload)
+					self.msock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
 			
 			# DELETE NODE
 			del self.nodes[node_name]
@@ -163,7 +181,7 @@ class StateFinder(object):
 					if self.nodes[pub_node].isLocal == True and self.nodes[pub_node].isFiltered == False:
 						data = ['pub', pub_node, topic_name, topic_type_list[topic_name], self.nodes[pub_node].node_uri]
 						payload = pickle.dumps(data)
-						self.sendMulticastMsg(payload)
+						self.msock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
 
 		# STATE OF SUBSCRIBERS
 		for topic_name, sub_nodes in state[1]:
@@ -175,7 +193,7 @@ class StateFinder(object):
 					if self.nodes[sub_node].isLocal == True and self.nodes[sub_node].isFiltered == False:
 						data = ['sub', sub_node, topic_name, topic_type_list[topic_name], self.nodes[sub_node].node_uri]
 						payload = pickle.dumps(data)
-						self.sendMulticastMsg(payload)
+						self.msock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
 
 		# TODO : Find the unpub and unsub topics of which the nodes are still alived.
 
@@ -190,7 +208,7 @@ class StateFinder(object):
 					if self.nodes[service_node].isLocal == True and self.nodes[service_node].isFiltered == False:
 						data = ['service', service_node, service_name, service_uri, self.nodes[service_node].node_uri]
 						payload = pickle.dumps(data)
-						self.sendMulticastMsg(payload)
+						self.msock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
 						
 		# pub_nodes = {}
 		# for topic_name, nodes in state[0]:
@@ -252,10 +270,13 @@ class StateFinder(object):
 	def start(self):
 		self.t0 = threading.Thread(target=self.state_finder_thread)
 		self.t1 = threading.Thread(target=self.msg_receive_thread)
+		self.t2 = threading.Thread(target=self.sync_adjacent_master)
 		self.t0.daemon = True
 		self.t1.daemon = True
+		self.t2.daemon = True
 		self.t0.start()
 		self.t1.start()
+		self.t2.start()
 
 	def stop(self):
 		print('\n\n * Terminated.')
@@ -283,8 +304,9 @@ class StateFinder(object):
 		else:
 			return False
 
-	def sendMulticastMsg(self, payload):
-		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-		sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.MCAST_TTL)
-		sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
-		sock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
+	def sendUnicastMsg(self, dest_ip, payload):
+		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		dest = (dest_ip, self.UCAST_PORT)
+
+		sock.sendto(payload, dest)
+		sock.close()
