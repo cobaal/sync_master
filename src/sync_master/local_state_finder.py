@@ -24,13 +24,19 @@ class StateFinder(object):
 		self.timer_interval = 1
 		self.node_list = []
 		self.nodes = {}
-		# self.pubs = {}
 
 		self.MCAST_GRP = '224.1.1.1'
 		self.MCAST_PORT = 5007
 		self.MCAST_TTL = 1
 
-		# print(my_node_name)
+		'''
+		* GETTING MASTER API OF THIS NODE (I.E., SYNC_MASTER NODE'S MASTER OBJECT)
+		* GETTING THIS NODE URI
+		'''
+		self.my_master = xmlrpcclient.ServerProxy("http://localhost:11311")
+		self.my_node_uri = self._succeed(self.my_master.lookupNode(self.my_node_name, self.my_node_name))
+		# self.my_master = rosgraph.Master("")
+		# self.my_node_uri = self.my_master.lookupNode(self.my_node_name)
 
 	def msg_receive_thread(self):
 		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -44,8 +50,6 @@ class StateFinder(object):
 		while True:
 			payload = sock.recv(1024)
 			data = pickle.loads(payload)
-
-			# print("* received msg: " + str(data))
 
 			if data[0] == 'pub':
 				## registerPublisher(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
@@ -68,15 +72,6 @@ class StateFinder(object):
 			
 
 	def state_finder_thread(self):
-		'''
-		* GETTING MASTER API OF THIS NODE (I.E., SYNC_MASTER NODE'S MASTER OBJECT)
-		* GETTING THIS NODE URI
-		'''
-		self.my_master = xmlrpcclient.ServerProxy("http://localhost:11311")
-		self.my_node_uri = self._succeed(self.my_master.lookupNode(self.my_node_name, self.my_node_name))
-		# self.my_master = rosgraph.Master("")
-		# self.my_node_uri = self.my_master.lookupNode(self.my_node_name)
-
 		'''
 		* GETTING LIST OF NODES IN THIS MASTER INCLUDING OTHER NODES OBTAINED FROM OTHER MASTERS
 		* CATCHING THE CHANGES IN NODE (NEW/REMOVE)
@@ -193,7 +188,7 @@ class StateFinder(object):
 					print("[     NEW     ]\t*NODE:    " + service_node + "\n[   SERVICE   ]\t*SERVICE: " + service_name + "\n\t\t (" + service_uri + ")\n")
 					# SEND MESSAGE
 					if self.nodes[service_node].isLocal == True and self.nodes[service_node].isFiltered == False:
-						data = ['service', service_node, service_name, service_uri, self.nodes[sub_node].node_uri]
+						data = ['service', service_node, service_name, service_uri, self.nodes[service_node].node_uri]
 						payload = pickle.dumps(data)
 						self.sendMulticastMsg(payload)
 						
