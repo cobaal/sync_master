@@ -20,6 +20,8 @@ from .infomation import NodeInfo
 
 class StateFinder(object):
 	def __init__(self, my_node_name):
+		self._lock = threading.Lock()
+
 		self.my_node_name = my_node_name
 		self.timer_interval = 1
 		self.node_list = []
@@ -37,14 +39,20 @@ class StateFinder(object):
 		# FOR UNICAST SOCKET
 		self.UCAST_PORT = 3001
 
+		self.usock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
 		'''
 		* GETTING MASTER API OF THIS NODE (I.E., SYNC_MASTER NODE'S MASTER OBJECT)
 		* GETTING THIS NODE URI
 		'''
+		self._lock.acquire()
 		self.my_master = xmlrpcclient.ServerProxy("http://localhost:11311")
 		self.my_node_uri = self._succeed(self.my_master.lookupNode(self.my_node_name, self.my_node_name))
 		# self.my_master = rosgraph.Master("")
 		# self.my_node_uri = self.my_master.lookupNode(self.my_node_name)
+		self._lock.release()
+
+		self.local_ip = self.my_node_uri.split('/')[2].split(':')[0]
 
 	def msg_receive_thread(self):
 		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -61,33 +69,88 @@ class StateFinder(object):
 
 			if data[0] == 'pub':
 				## registerPublisher(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
+				self._lock.acquire()
 				print(self.my_master.registerPublisher(data[1], data[2], data[3], data[4]))
+				self._lock.release()
 			elif data[0] == 'upub':
 				## unregisterPublisher(NODE_NAME, TOPIC_NAME, NODE_URI)
+				self._lock.acquire()
 				print(self.my_master.unregisterPublisher(data[1], data[2], data[3]))
+				self._lock.release()
 			elif data[0] == 'sub':
 				## registerSubscriber(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
+				self._lock.acquire()
 				print(self.my_master.registerSubscriber(data[1], data[2], data[3], data[4]))
+				self._lock.release()
 			elif data[0] == 'usub':
 				## unregisterSubscriber(NODE_NAME, TOPIC_NAME, NODE_URI)
+				self._lock.acquire()
 				print(self.my_master.unregisterSubscriber(data[1], data[2], data[3]))
+				self._lock.release()
 			elif data[0] == 'service':
 				## registerService(NODE_NAME, SERVICE_NAME, SERVICE_URI, NODE_URI)
+				self._lock.acquire()
 				print(self.my_master.registerService(data[1], data[2], data[3], data[4]))
+				self._lock.release()
 			elif data[0] == 'uservice':
 				## unregisterService(NODE_NAME, SERVICE_NAME, SERVICE_URI)
+				self._lock.acquire()
 				print(self.my_master.unregisterService(data[1], data[2], data[3]))
+				self._lock.release()
 			elif data[0] == 'req':
-				print(data[1])
-				# TODO : RESPONSE MY LOCAL MASTER URI (EX. HTTP://{IP}:11311) OR MY LOCAL IP
+				## RESPONSE : STATE OF LOCAL MASTER
+				msg = []
+				for __node in self.nodes.values():
+					if __node.isFiltered == False:
+						## PUB
+						for pub_name in __node.publishedTopics.keys():
+							msg.append(['pub', __node.node_name, pub_name, __node.publishedTopics[pub_name], __node.node_uri])
+						## SUB
+						for sub_name in __node.subscribedTopics.keys():
+							msg.append(['sub', __node.node_name, sub_name, __node.subscribedTopics[sub_name], __node.node_uri])
+						## SVC
+						for svc_name in __node.services.keys():
+							msg.append(['service', __node.node_name, svc_name, __node.services[svc_name], __node.node_uri])
+
+				tdata = ['res', msg]
+				tpayload = pickle.dumps(tdata)
+				self.usock.sendto(tpayload, (data[1], self.UCAST_PORT))
 			
 	def sync_adjacent_master(self):
 		# MULTICASTING SYNC REQ SIGNAL
-		data = ['req', self.my_node_uri.split('/')[2].split(':')[0]]
+		data = ['req', self.local_ip]
 		payload = pickle.dumps(data)
 		self.msock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
 
 		# TODO : RECEIVE UNICAST MESSAGE - ADJACENT MASTER'S URI
+		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+		# Bind the socket to the port
+		recv_address = ('0.0.0.0', self.UCAST_PORT)
+		sock.bind(recv_address)
+
+		_payload = sock.recv(10240)
+		_data = pickle.loads(_payload)
+
+		if _data[0] == 'res':
+			for msg in _data[1]:
+				if msg[0] == 'pub':
+					## registerPublisher(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
+					self._lock.acquire()
+					print(self.my_master.registerPublisher(msg[1], msg[2], msg[3], msg[4]))
+					self._lock.release()
+				elif msg[0] == 'sub':
+					## registerSubscriber(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
+					self._lock.acquire()
+					print(self.my_master.registerSubscriber(msg[1], msg[2], msg[3], msg[4]))
+					self._lock.release()
+				elif msg[0] == 'service':
+					## registerService(NODE_NAME, SERVICE_NAME, SERVICE_URI, NODE_URI)
+					self._lock.acquire()
+					print(self.my_master.registerService(msg[1], msg[2], msg[3], msg[4]))
+					self._lock.release()
+
+		sock.close()
 
 	def state_finder_thread(self):
 		'''
@@ -103,13 +166,33 @@ class StateFinder(object):
 			- subscribedTopics	: dict[TOPIC_NAME] = TOPIC_TYPE
 			- service			: dict[SERVICE_NAME] = SERVICE_URI
 		'''
-		node_names = rosnode.get_node_names()
+
+		'''
+		* GETTING STATE OF THIS LOCAL MASTER FROM getSystemState()
+		* [0] : PUBLISHED TOPIC		[[TOPIC_NAME, [PUBLISHER_1, PUBLISHER_2, ...]], ...]
+		* [1] : SUBSCRIBED TOPIC	[[TOPIC_NAME, [SUBSCRIBER_1, SUBSCRIBER_2, ...]], ...]
+		* [2] : SERVICE				[[SERVICE_NAME, [NODE_1, NODE_2, ...]], ...]
+		'''
+		self._lock.acquire()
+		state = self._succeed(self.my_master.getSystemState(self.my_node_name))
+		# state = self.my_master.getSystemState()
+		self._lock.release()
+		
+		_nodes = []
+		for s in state:
+			for feature_name, set_of_nodes in s:
+				_nodes.extend(set_of_nodes)
+		node_names = list(set(_nodes))
+		# node_names = rosnode.get_node_names()
+
 		new_nodes = set(node_names) - set(self.node_list)
 
 		# ADD NEW NODES
 		for node_name in new_nodes:
 			# ADD NEW NODE
+			self._lock.acquire()
 			node_uri = self._succeed(self.my_master.lookupNode(self.my_node_name, node_name))
+			self._lock.release()
 			self.nodes[node_name] = NodeInfo(node_name, node_uri)
 
 			# FILTERING
@@ -150,36 +233,18 @@ class StateFinder(object):
 
 		# SAVE NODE LIST
 		self.node_list = node_names
-			
-		'''
-		* GETTING TOPIC NAME NAD TYPE LIST OF THIS DEVICE
-		* [[TOPIC_NAME, TOPIC_TYPE], ...] FROM getTopicTypes() 
-		* TOPIC TYPE DICT : DICT[TOPIC_NAME] = TOPIC_TYPE
-		'''
-		topic_type_list = {}
-		topic_types = self._succeed(self.my_master.getTopicTypes(self.my_node_name))
-		# topic_types = self.my_master.getTopicTypes()
-		for topic_name, topic_type in topic_types:
-			topic_type_list[topic_name] = topic_type
-
-		'''
-		* GETTING STATE OF THIS LOCAL MASTER FROM getSystemState()
-		* [0] : PUBLISHED TOPIC		[[TOPIC_NAME, [PUBLISHER_1, PUBLISHER_2, ...]], ...]
-		* [1] : SUBSCRIBED TOPIC	[[TOPIC_NAME, [SUBSCRIBER_1, SUBSCRIBER_2, ...]], ...]
-		* [2] : SERVICE				[[SERVICE_NAME, [NODE_1, NODE_2, ...]], ...]
-		'''
-		state = self._succeed(self.my_master.getSystemState(self.my_node_name))
-		# state = self.my_master.getSystemState()
 
 		# STATE OF PUBLISHERS
 		for topic_name, pub_nodes in state[0]:
 			for pub_node in pub_nodes:
 				# CHECK THE OVERLAP PUB TOPICS
-				if self.nodes[pub_node].addPublishedTopics(topic_name, topic_type_list[topic_name]) == 0:
-					print("[         NEW ]\t*NODE:  " + pub_node + " (Publisher)\n[       TOPIC ]\t*TOPIC: " + topic_name + " (type: " + topic_type_list[topic_name] + ")\n")
+				if self.nodes[pub_node].isDuplicatedPublishedTopics(topic_name) == False:
+					topic_type = self.getTopicType(topic_name)
+					self.nodes[pub_node].addPublishedTopics(topic_name, topic_type)
+					print("[         NEW ]\t*NODE:  " + pub_node + " (Publisher)\n[       TOPIC ]\t*TOPIC: " + topic_name + " (type: " + topic_type + ")\n")
 					# SEND MESSAGE
 					if self.nodes[pub_node].isLocal == True and self.nodes[pub_node].isFiltered == False:
-						data = ['pub', pub_node, topic_name, topic_type_list[topic_name], self.nodes[pub_node].node_uri]
+						data = ['pub', pub_node, topic_name, topic_type, self.nodes[pub_node].node_uri]
 						payload = pickle.dumps(data)
 						self.msock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
 
@@ -187,11 +252,13 @@ class StateFinder(object):
 		for topic_name, sub_nodes in state[1]:
 			for sub_node in sub_nodes:
 				# CHECK THE OVERLAP SUB TOPICS
-				if self.nodes[sub_node].addSubscribedTopics(topic_name, topic_type_list[topic_name]) == 0:
-					print("[         NEW ]\t*NODE:  " + sub_node + " (Subscriber)\n[       TOPIC ]\t*TOPIC: " + topic_name + " (type: " + topic_type_list[topic_name] + ")\n")
+				if self.nodes[sub_node].isDuplicatedSubscribedTopics(topic_name) == False:
+					topic_type = self.getTopicType(topic_name)
+					self.nodes[sub_node].addSubscribedTopics(topic_name, topic_type)
+					print("[         NEW ]\t*NODE:  " + sub_node + " (Subscriber)\n[       TOPIC ]\t*TOPIC: " + topic_name + " (type: " + topic_type + ")\n")
 					# SEND MESSAGE
 					if self.nodes[sub_node].isLocal == True and self.nodes[sub_node].isFiltered == False:
-						data = ['sub', sub_node, topic_name, topic_type_list[topic_name], self.nodes[sub_node].node_uri]
+						data = ['sub', sub_node, topic_name, topic_type, self.nodes[sub_node].node_uri]
 						payload = pickle.dumps(data)
 						self.msock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
 
@@ -201,8 +268,11 @@ class StateFinder(object):
 		for service_name, service_nodes in state[2]:
 			for service_node in service_nodes:
 				# CHECK THE OVERLAP SERVICES
-				service_uri = self._succeed(self.my_master.lookupService(self.my_node_name, service_name))
-				if self.nodes[service_node].addService(service_name, service_uri) == 0:
+				if self.nodes[service_node].isDuplicatedService(service_name) == False:
+					self._lock.acquire()
+					service_uri = self._succeed(self.my_master.lookupService(self.my_node_name, service_name))
+					self._lock.release()
+					self.nodes[service_node].addService(service_name, service_uri)
 					print("[     NEW     ]\t*NODE:    " + service_node + "\n[   SERVICE   ]\t*SERVICE: " + service_name + "\n\t\t (" + service_uri + ")\n")
 					# SEND MESSAGE
 					if self.nodes[service_node].isLocal == True and self.nodes[service_node].isFiltered == False:
@@ -281,6 +351,9 @@ class StateFinder(object):
 	def stop(self):
 		print('\n\n * Terminated.')
 
+		self.msock.close()
+		self.usock.close()
+
 	def _succeed(self, args):
 		code, msg, val = args
 		if code != 1:
@@ -310,3 +383,20 @@ class StateFinder(object):
 
 		sock.sendto(payload, dest)
 		sock.close()
+
+	def getTopicType(self, topic_name):
+		'''
+		* GETTING TOPIC NAME NAD TYPE LIST OF THIS DEVICE
+		* [[TOPIC_NAME, TOPIC_TYPE], ...] FROM getTopicTypes() 
+		* TOPIC TYPE DICT : DICT[TOPIC_NAME] = TOPIC_TYPE
+		'''
+		topic_type_list = {}
+		self._lock.acquire()
+		topic_types = self._succeed(self.my_master.getTopicTypes(self.my_node_name))
+		# topic_types = self.my_master.getTopicTypes()
+		self._lock.release()
+
+		for _name, _type in topic_types:
+			topic_type_list[_name] = _type
+
+		return topic_type_list[topic_name]

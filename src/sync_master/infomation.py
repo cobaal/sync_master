@@ -59,70 +59,38 @@ class NodeInfo(object):
 		return self._subscribedTopics
 
 	def addPublishedTopics(self, topic_name, topic_type):
-		if topic_name in self._publishedTopics.keys() and topic_type in self._publishedTopics.values():
-			return -1
-		else:
-			self._publishedTopics[topic_name] = topic_type
-			return 0
+		self._publishedTopics[topic_name] = topic_type
 
-	def delPublishedTopics(self, topic_name):
+	def isDuplicatedPublishedTopics(self, topic_name):
 		if topic_name in self._publishedTopics.keys():
-			del self._publishedTopics[topic_name]
-			return 0
+			return True
 		else:
-			return -1
+			return False
 
 	def addSubscribedTopics(self, topic_name, topic_type):
-		if topic_name in self._subscribedTopics.keys() and topic_type in self._subscribedTopics.values():
-			return -1
-		else:
-			self._subscribedTopics[topic_name] = topic_type
-			return 0
+		self._subscribedTopics[topic_name] = topic_type
 
-	def delSubscribedTopics(self, topic_name):
+	def isDuplicatedSubscribedTopics(self, topic_name):
 		if topic_name in self._subscribedTopics.keys():
-			del self._subscribedTopics[topic_name]
-			return 0
+			return True
 		else:
-			return -1
+			return False
 
 	@property
 	def services(self):
 		return self._services
 
-	# @services.setter
-	# def services(self, name):
-	# 	try:
-	# 		if isinstance(name, list):
-	# 			del self._services
-	# 			self._services = name
-	# 		else:
-	# 			self._services.index(name)
-	# 	except ValueError:
-	# 		self._services.append(name)
-
 	def addService(self, service_name, service_uri):
-		if service_name in self._services.keys() and service_uri in self._services.values():
-			return -1
+		self._services[service_name] = service_uri
+
+	def isDuplicatedService(self, service_name):
+		if service_name in self._services.keys():
+			return True
 		else:
-			self._services[service_name] = service_uri
-			return 0
+			return False
 
 	def isDuplicated(self, node_name, node_uri):
 		if self._node_name == node_name and self._node_uri == node_uri:
 			return True
 		else:
 			return False				
-
-# class TopicInfo(object):
-# 	def __init__(self, topic_name, topic_type):
-# 		self._topic_name = topic_name
-# 		self._topic_type = topic_type
-
-# 	@property
-# 	def topic_name(self):
-# 		return self._topic_name
-
-# 	@property
-# 	def topic_type(self):
-# 		return self._topic_type
