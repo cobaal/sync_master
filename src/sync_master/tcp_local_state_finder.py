@@ -225,122 +225,13 @@ class StateFinder(object):
 	'''
 	def sendAll(self, msg):
 		payload = '$' + str(len(msg)) + '*' + msg
-		for client_sock in self.client_socks.values():
-			client_sock.send(payload)
-
-	def msg_receive_thread(self):
-		self.mrsock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-		self.mrsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-		self.mrsock.bind((self.MCAST_GRP, self.MCAST_PORT))
-		mreq = struct.pack("4sl", socket.inet_aton(self.MCAST_GRP), socket.INADDR_ANY)
-
-		self.mrsock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-
-		while True:
+		for key in self.client_socks.keys():
 			try:
-				payload = self.mrsock.recv(1024)
-				data = pickle.loads(payload)
+				self.client_socks[key].send(payload)
 			except Exception as e:
-				print('** Exception (rx multicast, pickle) : ' + str(e) + '\n')
+				print('** Exception (tcp destination address - ' + self.mask + key + ') : ' + str(e))
 
-			if data[0] == 'pub':
-				## registerPublisher(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
-				self._lock.acquire()
-				print(self.my_master.registerPublisher(data[1], data[2], data[3], data[4]))
-				self._lock.release()
-			elif data[0] == 'upub':
-				## unregisterPublisher(NODE_NAME, TOPIC_NAME, NODE_URI)
-				self._lock.acquire()
-				print(self.my_master.unregisterPublisher(data[1], data[2], data[3]))
-				self._lock.release()
-			elif data[0] == 'sub':
-				## registerSubscriber(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
-				self._lock.acquire()
-				print(self.my_master.registerSubscriber(data[1], data[2], data[3], data[4]))
-				self._lock.release()
-			elif data[0] == 'usub':
-				## unregisterSubscriber(NODE_NAME, TOPIC_NAME, NODE_URI)
-				self._lock.acquire()
-				print(self.my_master.unregisterSubscriber(data[1], data[2], data[3]))
-				self._lock.release()
-			elif data[0] == 'service':
-				## registerService(NODE_NAME, SERVICE_NAME, SERVICE_URI, NODE_URI)
-				self._lock.acquire()
-				print(self.my_master.registerService(data[1], data[2], data[3], data[4]))
-				self._lock.release()
-			elif data[0] == 'uservice':
-				## unregisterService(NODE_NAME, SERVICE_NAME, SERVICE_URI)
-				self._lock.acquire()
-				print(self.my_master.unregisterService(data[1], data[2], data[3]))
-				self._lock.release()
-			elif data[0] == 'req':
-				## RESPONSE : STATE OF LOCAL MASTER
-				msg = []
-				for __node in self.nodes.values():
-					if __node.isFiltered == False:
-						## PUB
-						for pub_name in __node.publishedTopics.keys():
-							msg.append(['pub', __node.node_name, pub_name, __node.publishedTopics[pub_name], __node.node_uri])
-						## SUB
-						for sub_name in __node.subscribedTopics.keys():
-							msg.append(['sub', __node.node_name, sub_name, __node.subscribedTopics[sub_name], __node.node_uri])
-						## SVC
-						for svc_name in __node.services.keys():
-							msg.append(['service', __node.node_name, svc_name, __node.services[svc_name], __node.node_uri])
-
-				tdata = ['res', msg]
-				tpayload = pickle.dumps(tdata)
-
-				utsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-				try:
-					utsock.connect((data[1], self.UCAST_PORT))
-					utsock.send(tpayload)
-				except Exception as e:
-					print('** Exception (tx tcp unicast) : ' + str(e) + '\n')
-
-				utsock.close()
-			
-	def sync_adjacent_master(self):
-		# MULTICASTING SYNC REQ SIGNAL
-		data = ['req', self.local_ip]
-		payload = pickle.dumps(data)
-		self.mtsock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
-
-		# RECEIVE UNICAST MESSAGE - ADJACENT MASTER'S URI
-		ursock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-		ursock.bind((self.local_ip, self.UCAST_PORT))
-		ursock.listen(1)
-
-		crsock, addr = ursock.accept()
-		print("[ SYNC ] RECEIVING SYNC MSG FROM " + addr[0] + "...\n")
-
-		try:
-			_payload = crsock.recv(10240)
-			_data = pickle.loads(_payload)
-		except Exception as e:
-			print('** Exception (rx tcp unicast, pickle) : ' + str(e) + '\n')
-
-		if _data[0] == 'res':
-			for msg in _data[1]:
-				if msg[0] == 'pub':
-					## registerPublisher(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
-					self._lock.acquire()
-					print(self.my_master.registerPublisher(msg[1], msg[2], msg[3], msg[4]))
-					self._lock.release()
-				elif msg[0] == 'sub':
-					## registerSubscriber(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
-					self._lock.acquire()
-					print(self.my_master.registerSubscriber(msg[1], msg[2], msg[3], msg[4]))
-					self._lock.release()
-				elif msg[0] == 'service':
-					## registerService(NODE_NAME, SERVICE_NAME, SERVICE_URI, NODE_URI)
-					self._lock.acquire()
-					print(self.my_master.registerService(msg[1], msg[2], msg[3], msg[4]))
-					self._lock.release()
-
-		crsock.close()
-		ursock.close()
+			# TODO : UPDATE MEMBER LIST OF ALL MASTERS (DELETE MEMBER)
 
 	def state_finder_thread(self):
 		'''
@@ -482,16 +373,6 @@ class StateFinder(object):
 			self.thread_sft = threading.Thread(target=self.state_finder_thread)
 			self.thread_sft.daemon = True
 			self.thread_sft.start()
-
-			# self.t0 = threading.Thread(target=self.state_finder_thread)
-			# self.t1 = threading.Thread(target=self.msg_receive_thread)
-			# self.t2 = threading.Thread(target=self.sync_adjacent_master)
-			# self.t0.daemon = True
-			# self.t1.daemon = True
-			# self.t2.daemon = True
-			# self.t0.start()
-			# self.t1.start()
-			# self.t2.start()
 
 		else:
 			self.thread_reqml = threading.Thread(target=self.request_member_list)
