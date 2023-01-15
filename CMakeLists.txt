@@ -161,6 +161,7 @@ CATKIN_DEPENDS rospy std_msgs
 catkin_install_python(PROGRAMS
 #   scripts/my_python_script
   nodes/sync_master_node
+  nodes/tcp_sync_master_node
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

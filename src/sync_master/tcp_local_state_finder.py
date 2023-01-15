@@ -1,16 +1,11 @@
 #!/usr/bin/env python
 
-# import rospy
 try:
 	import xmlrpclib as xmlrpcclient  # python 2 compatibility
 except ImportError:
 	import xmlrpc.client as xmlrpcclient
 
-# import time
 import threading
-
-# import rosgraph
-# import rosnode
 
 import pickle
 import socket
@@ -27,6 +22,21 @@ class StateFinder(object):
 		self.node_list = []
 		self.nodes = {}
 
+		self.members = []
+		self.client_socks = {}
+
+		'''
+		* GETTING MASTER API OF THIS NODE (I.E., SYNC_MASTER NODE'S MASTER OBJECT)
+		* GETTING THIS NODE URI
+		'''
+		self._lock.acquire()
+		self.my_master = xmlrpcclient.ServerProxy("http://localhost:11311")
+		self.my_node_uri = self._succeed(self.my_master.lookupNode(self.my_node_name, self.my_node_name))
+		self._lock.release()
+
+		self.local_ip = self.my_node_uri.split('/')[2].split(':')[0]
+		self.mask = self.local_ip.split('.')[0] + '.' + self.local_ip.split('.')[1] + '.' +  self.local_ip.split('.')[2] + '.'
+
 		# FOR MULTICAST SOCKET
 		self.MCAST_GRP = '224.1.1.1'
 		self.MCAST_PORT = 5007
@@ -37,20 +47,186 @@ class StateFinder(object):
 		self.mtsock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
 
 		# FOR UNICAST SOCKET
-		self.UCAST_PORT = 3001
+		self.UCAST_PORT = 3002
 
-		'''
-		* GETTING MASTER API OF THIS NODE (I.E., SYNC_MASTER NODE'S MASTER OBJECT)
-		* GETTING THIS NODE URI
-		'''
-		self._lock.acquire()
-		self.my_master = xmlrpcclient.ServerProxy("http://localhost:11311")
-		self.my_node_uri = self._succeed(self.my_master.lookupNode(self.my_node_name, self.my_node_name))
-		# self.my_master = rosgraph.Master("")
-		# self.my_node_uri = self.my_master.lookupNode(self.my_node_name)
-		self._lock.release()
+		self.ursock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		self.ursock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+		self.ursock.bind((self.local_ip, self.UCAST_PORT))
+		self.ursock.listen(255)		
 
-		self.local_ip = self.my_node_uri.split('/')[2].split(':')[0]
+	'''
+	* MULTICAST REQUEST MESSAGE SEND (INTERVAL : 1 SEC)
+	'''
+	def request_member_list(self):
+		payload = pickle.dumps(['reqm'])
+
+		if len(self.members) == 0:
+			self.mtsock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
+
+			self.thread_reqml = threading.Timer(self.timer_interval, self.request_member_list)
+			self.thread_reqml.daemon = True
+			self.thread_reqml.start()
+
+	'''
+	* MULTICASET RECEIVE
+	*	- reqm : SEND MEMBER LIST AND SYNC INFO TO ADJASENT MASTER
+	*	- resm : RECEIVE MEMBER LIST AND REGISTER TCP RECEIVER (THREAD)
+	'''
+	def response_member_list(self):
+		self.mrsock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+		self.mrsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+		self.mrsock.bind((self.MCAST_GRP, self.MCAST_PORT))
+		mreq = struct.pack("4sl", socket.inet_aton(self.MCAST_GRP), socket.INADDR_ANY)
+
+		self.mrsock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+		
+		while True:
+			try:
+				payload = self.mrsock.recv(10240)
+				data = pickle.loads(payload)
+			except Exception as e:
+				print('** Exception (rx multicast, pickle) : ' + str(e) + '\n')
+
+			if data[0] == 'reqm' and len(self.members) != 0:
+				## SEND MEMBER LIST AND SYNC INFO TO ADJASENT MASTER
+				msg = []
+				for __node in self.nodes.values():
+					if __node.isFiltered == False:
+						## PUB
+						for pub_name in __node.publishedTopics.keys():
+							msg.append(['pub', __node.node_name, pub_name, __node.publishedTopics[pub_name], __node.node_uri])
+						## SUB
+						for sub_name in __node.subscribedTopics.keys():
+							msg.append(['sub', __node.node_name, sub_name, __node.subscribedTopics[sub_name], __node.node_uri])
+						## SVC
+						for svc_name in __node.services.keys():
+							msg.append(['service', __node.node_name, svc_name, __node.services[svc_name], __node.node_uri])
+				
+				payload = pickle.dumps(['resm', self.members, msg])
+				self.mtsock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
+
+			elif data[0] == 'resm' and len(self.members) == 0:
+				## RECEIVE MEMBER LIST
+				self.members = data[1]
+				for member in self.members:
+					## REGISTRATION TCP RECEIVER
+					thread_trt = threading.Thread(target=self.tcp_receive_thread, args=(self.mask + member,))
+					thread_trt.daemon = True
+					thread_trt.start()
+				self.thread_sft = threading.Thread(target=self.state_finder_thread)
+				self.thread_sft.daemon = True
+				self.thread_sft.start()
+
+				self.members.append(self.local_ip.split('.')[3])
+
+				for msg in data[2]:
+					if msg[0] == 'pub':
+						## registerPublisher(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
+						self._lock.acquire()
+						print(self.my_master.registerPublisher(msg[1], msg[2], msg[3], msg[4]))
+						self._lock.release()
+					elif msg[0] == 'sub':
+						## registerSubscriber(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
+						self._lock.acquire()
+						print(self.my_master.registerSubscriber(msg[1], msg[2], msg[3], msg[4]))
+						self._lock.release()
+					elif msg[0] == 'service':
+						## registerService(NODE_NAME, SERVICE_NAME, SERVICE_URI, NODE_URI)
+						self._lock.acquire()
+						print(self.my_master.registerService(msg[1], msg[2], msg[3], msg[4]))
+						self._lock.release()
+
+	'''
+	* TCP RECIEVER (CONNECTION)
+	'''			
+	def tcp_receive_thread(self, ip):
+		## TCP CONNECTION : REGISTRATION TCP RECEIVER 
+		ursock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		try:
+			ursock.connect((ip, self.UCAST_PORT))
+		except Exception as e:
+			print('** Exception (unicast connection) : ' + str(e) + '\n')
+
+		rxsize = ''
+		trigger = False
+
+		## TCP RECEIVER
+		while True:
+			rxchar = ursock.recv(1)
+			## PARSING FOR DYNAMIC BUFFER SIZE
+			if rxchar == '$':
+				rxsize = ''
+				trigger = True
+			elif trigger == True and rxchar != '*':
+				rxsize = rxsize + rxchar
+			elif trigger == True and rxchar == '*':
+				buffer_size = int(rxsize)
+				rxsize = ''
+				trigger = False	
+
+				## RECEIVE PAYLOAD
+				try:
+					payload = ursock.recv(buffer_size)
+					data = pickle.loads(payload)
+
+					if data[0] == 'pub':
+						## registerPublisher(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
+						self._lock.acquire()
+						print(self.my_master.registerPublisher(data[1], data[2], data[3], data[4]))
+						self._lock.release()
+					elif data[0] == 'upub':
+						## unregisterPublisher(NODE_NAME, TOPIC_NAME, NODE_URI)
+						self._lock.acquire()
+						print(self.my_master.unregisterPublisher(data[1], data[2], data[3]))
+						self._lock.release()
+					elif data[0] == 'sub':
+						## registerSubscriber(NODE_NAME, TOPIC_NAME, TOPIC_TYPE, NODE_URI)
+						self._lock.acquire()
+						print(self.my_master.registerSubscriber(data[1], data[2], data[3], data[4]))
+						self._lock.release()
+					elif data[0] == 'usub':
+						## unregisterSubscriber(NODE_NAME, TOPIC_NAME, NODE_URI)
+						self._lock.acquire()
+						print(self.my_master.unregisterSubscriber(data[1], data[2], data[3]))
+						self._lock.release()
+					elif data[0] == 'service':
+						## registerService(NODE_NAME, SERVICE_NAME, SERVICE_URI, NODE_URI)
+						self._lock.acquire()
+						print(self.my_master.registerService(data[1], data[2], data[3], data[4]))
+						self._lock.release()
+					elif data[0] == 'uservice':
+						## unregisterService(NODE_NAME, SERVICE_NAME, SERVICE_URI)
+						self._lock.acquire()
+						print(self.my_master.unregisterService(data[1], data[2], data[3]))
+						self._lock.release()
+
+				except Exception as e:
+					print('** Exception (rx unicast, pickle) : ' + str(e) + '\n')
+
+	'''
+	* TCP CONNECTION RECEIVER
+	'''
+	def registration_receive_thread(self):
+		while True:
+			clientsock, addr = self.ursock.accept()
+			member = addr[0].split('.')[3]
+			self.client_socks[member] = clientsock
+
+			if not member in self.members:
+				## REGISTRATION TCP RECEIVER
+				thread_trt = threading.Thread(target=self.tcp_receive_thread, args=(self.mask + member,))
+				thread_trt.daemon = True
+				thread_trt.start()
+				self.members.append(member)
+
+	'''
+	* SEND SYNC MESSAGE TO REGISTERED MASTERS
+	'''
+	def sendAll(self, msg):
+		payload = '$' + str(len(msg)) + '*' + msg
+		for client_sock in self.client_socks.values():
+			client_sock.send(payload)
 
 	def msg_receive_thread(self):
 		self.mrsock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -227,20 +403,17 @@ class StateFinder(object):
 				for topic_name in self.nodes[node_name].publishedTopics.keys():
 					print("[     REMOVED ]\t*NODE:  " + node_name + " (Publisher)\n[       TOPIC ]\t*TOPIC: " + topic_name + "\n")
 					data = ['upub', node_name, topic_name, self.nodes[node_name].node_uri]
-					payload = pickle.dumps(data)
-					self.mtsock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
+					self.sendAll(pickle.dumps(data))
 				# UNSUBSCRIBE
 				for topic_name in self.nodes[node_name].subscribedTopics.keys():
 					print("[     REMOVED ]\t*NODE:  " + node_name + " (Subscriber)\n[       TOPIC ]\t*TOPIC: " + topic_name + "\n")
 					data = ['usub', node_name, topic_name, self.nodes[node_name].node_uri]
-					payload = pickle.dumps(data)
-					self.mtsock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
+					self.sendAll(pickle.dumps(data))
 				# UNSERVICE
 				for service_name in self.nodes[node_name].services.keys():
 					print("[   REMOVED   ]\t*NODE:    " + node_name + " \n[   SERVICE   ]\t*SERVICE: " + service_name + "\n")
 					data = ['uservice', node_name, service_name, self.nodes[node_name].services[service_name]]
-					payload = pickle.dumps(data)
-					self.mtsock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
+					self.sendAll(pickle.dumps(data))
 			
 			# DELETE NODE
 			del self.nodes[node_name]
@@ -259,8 +432,7 @@ class StateFinder(object):
 					# SEND MESSAGE
 					if self.nodes[pub_node].isLocal == True and self.nodes[pub_node].isFiltered == False:
 						data = ['pub', pub_node, topic_name, topic_type, self.nodes[pub_node].node_uri]
-						payload = pickle.dumps(data)
-						self.mtsock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
+						self.sendAll(pickle.dumps(data))
 
 		# STATE OF SUBSCRIBERS
 		for topic_name, sub_nodes in state[1]:
@@ -273,8 +445,7 @@ class StateFinder(object):
 					# SEND MESSAGE
 					if self.nodes[sub_node].isLocal == True and self.nodes[sub_node].isFiltered == False:
 						data = ['sub', sub_node, topic_name, topic_type, self.nodes[sub_node].node_uri]
-						payload = pickle.dumps(data)
-						self.mtsock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
+						self.sendAll(pickle.dumps(data))
 
 		# TODO : Find the unpub and unsub topics of which the nodes are still alived.
 
@@ -291,82 +462,50 @@ class StateFinder(object):
 					# SEND MESSAGE
 					if self.nodes[service_node].isLocal == True and self.nodes[service_node].isFiltered == False:
 						data = ['service', service_node, service_name, service_uri, self.nodes[service_node].node_uri]
-						payload = pickle.dumps(data)
-						self.mtsock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
-						
-		# pub_nodes = {}
-		# for topic_name, nodes in state[0]:
-		# 	pub_nodes[topic_name] = nodes
-
-		# # NEW PUB TOPICS
-		# new_pub_topics = set(pub_nodes.keys()) - set(self.pubs.keys())
-		# for topic_name in new_pub_topics:
-		# 	for pub_node in pub_nodes.values():
-		# 		print("[ tests    NEW ]\t*NODE:  " + pub_node + " (Publisher)\n[       TOPIC ]\t*TOPIC: " + topic_name + " (type: " + topic_type_list[topic_name] + ")\n")
-
-		# # REMOVED PUB TOPICS
-		# removed_pub_topics = set(self.pubs.keys()) - set(pub_nodes.keys())
-		# print(removed_pub_topics)
-
-		# for topic in set(pub_nodes.keys()) & set(self.pubs.keys()):
-		# 	# NEW PUBLISHERS
-		# 	new_publishers = set(self.pubs[topic]) - set(pub_nodes[topic])
-
-		# 	# REMOVED PUBLISHERS
-		# 	removed_publishers = set(pub_nodes[topic])- set(self.pubs[topic])
-
-		# 	print(new_publishers)
-		# 	print(removed_publishers)
-			
-
-		# # SAVE PUB TOPICS
-		# self.pubs = pub_nodes
-
-		# print("")
-		# for node in self.nodes.values():
-		# 	print(node.node_name)
-		# 	print("\t" + node.node_uri + " (PID:" + str(node.node_pid) + ")")
-		# 	print("\tPUB : " + str(node.publishedTopics))
-		# 	print("\tSUB : " + str(node.subscribedTopics))
-		# 	print("")
-
-		# code, message, topicTypes = self.my_master.getTopicTypes(self.my_node_name)
-		# topicTypesDict = {}
-		# for topic, type in topicTypes:
-		# 	topicTypesDict[topic] = type
-		# print(topicTypesDict)
-		# print('=============================')
-		# code, message, state = self.my_master.getSystemState(self.my_node_name)
-		# print(state[0])
-		# print('=============================')
-		# print(state[1])
-		# print('=============================')
-		# print(state[2])
-		# print('')
-
-		
-		# print(self.my_node_name)
+						self.sendAll(pickle.dumps(data))
 
 		self.t0 = threading.Timer(self.timer_interval, self.state_finder_thread)
 		self.t0.daemon = True
 		self.t0.start()
 
-	def start(self):
-		self.t0 = threading.Thread(target=self.state_finder_thread)
-		self.t1 = threading.Thread(target=self.msg_receive_thread)
-		self.t2 = threading.Thread(target=self.sync_adjacent_master)
-		self.t0.daemon = True
-		self.t1.daemon = True
-		self.t2.daemon = True
-		self.t0.start()
-		self.t1.start()
-		self.t2.start()
+	def start(self, arg):
+		self.thread_resml = threading.Thread(target=self.response_member_list)
+		self.thread_regrt = threading.Thread(target=self.registration_receive_thread)
+		self.thread_resml.daemon = True
+		self.thread_regrt.daemon = True
+		self.thread_resml.start()
+		self.thread_regrt.start()
+
+		if arg == '--root':
+			self.members.append(self.local_ip.split('.')[3])
+
+			self.thread_sft = threading.Thread(target=self.state_finder_thread)
+			self.thread_sft.daemon = True
+			self.thread_sft.start()
+
+			# self.t0 = threading.Thread(target=self.state_finder_thread)
+			# self.t1 = threading.Thread(target=self.msg_receive_thread)
+			# self.t2 = threading.Thread(target=self.sync_adjacent_master)
+			# self.t0.daemon = True
+			# self.t1.daemon = True
+			# self.t2.daemon = True
+			# self.t0.start()
+			# self.t1.start()
+			# self.t2.start()
+
+		else:
+			self.thread_reqml = threading.Thread(target=self.request_member_list)
+			self.thread_reqml.daemon = True
+			self.thread_reqml.start()
 
 	def stop(self):
 		print('\n\n * Terminated.')
 
 		self.mtsock.close()
 		self.mrsock.close()
+		self.ursock.close()
+		for client_sock in self.client_socks.values():
+			client_sock.close()
 
 	def _succeed(self, args):
 		code, msg, val = args
@@ -400,7 +539,6 @@ class StateFinder(object):
 		topic_type_list = {}
 		self._lock.acquire()
 		topic_types = self._succeed(self.my_master.getTopicTypes(self.my_node_name))
-		# topic_types = self.my_master.getTopicTypes()
 		self._lock.release()
 
 		for _name, _type in topic_types:
