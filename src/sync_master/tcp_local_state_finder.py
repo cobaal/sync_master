@@ -57,13 +57,13 @@ class StateFinder(object):
 	'''
 	* MULTICAST REQUEST MESSAGE SEND (INTERVAL : 1 SEC)
 	'''
-	def request_member_list(self):
+	def root_finder_thread(self):
 		payload = pickle.dumps(['reqm'])
 
 		if len(self.members) == 0:
 			self.mtsock.sendto(payload, (self.MCAST_GRP, self.MCAST_PORT))
 
-			self.thread_reqml = threading.Timer(self.timer_interval, self.request_member_list)
+			self.thread_reqml = threading.Timer(self.timer_interval, self.root_finder_thread)
 			self.thread_reqml.daemon = True
 			self.thread_reqml.start()
 
@@ -72,7 +72,7 @@ class StateFinder(object):
 	*	- reqm : SEND MEMBER LIST AND SYNC INFO TO ADJASENT MASTER
 	*	- resm : RECEIVE MEMBER LIST AND REGISTER TCP RECEIVER (THREAD)
 	'''
-	def response_member_list(self):
+	def mcast_receive_thread(self):
 		self.mrsock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
 		self.mrsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
@@ -114,9 +114,9 @@ class StateFinder(object):
 					thread_trt = threading.Thread(target=self.tcp_receive_thread, args=(self.mask + member,))
 					thread_trt.daemon = True
 					thread_trt.start()
-				self.thread_sft = threading.Thread(target=self.state_finder_thread)
-				self.thread_sft.daemon = True
-				self.thread_sft.start()
+				self.t2 = threading.Thread(target=self.state_finder_thread)
+				self.t2.daemon = True
+				self.t2.start()
 
 				self.members.append(self.local_ip.split('.')[3])
 
@@ -138,7 +138,7 @@ class StateFinder(object):
 						self._lock.release()
 
 	'''
-	* TCP RECIEVER (CONNECTION)
+	* TCP RECIEVER (CONNECTION) : STATE RECEIVER
 	'''			
 	def tcp_receive_thread(self, ip):
 		## TCP CONNECTION : REGISTRATION TCP RECEIVER 
@@ -146,14 +146,21 @@ class StateFinder(object):
 		try:
 			ursock.connect((ip, self.UCAST_PORT))
 		except Exception as e:
-			print('** Exception (unicast connection) : ' + str(e) + '\n')
+			print('** Exception (unicast connection) : ' + str(e))
+			print('** Connection fail! : ' + ip + '\n')
+			return 0
 
 		rxsize = ''
 		trigger = False
 
+		print("[ NEW  MASTER ]\t*ADDRESS: " + ip + "\n")
+
 		## TCP RECEIVER
 		while True:
 			rxchar = ursock.recv(1)
+			if rxchar == '':
+				break
+
 			## PARSING FOR DYNAMIC BUFFER SIZE
 			if rxchar == '$':
 				rxsize = ''
@@ -204,10 +211,38 @@ class StateFinder(object):
 				except Exception as e:
 					print('** Exception (rx unicast, pickle) : ' + str(e) + '\n')
 
+		print("[ END  MASTER ]\t*ADDRESS: " + ip + "\n")
+		ursock.close()
+		idx = ip.split('.')[3]
+		self.client_socks[idx].close()
+		del self.client_socks[idx]
+		self.members.remove(idx)
+
+		for node in self.nodes.values():
+			if ip in node.node_uri:
+				# UNPUBLISH
+				for topic_name in node.publishedTopics.keys():
+					## unregisterPublisher(NODE_NAME, TOPIC_NAME, NODE_URI)
+					self._lock.acquire()
+					print(self.my_master.unregisterPublisher(node.node_name, topic_name, node.node_uri))
+					self._lock.release()
+				# UNSUBSCRIBE
+				for topic_name in node.subscribedTopics.keys():
+					## unregisterSubscriber(NODE_NAME, TOPIC_NAME, NODE_URI)
+					self._lock.acquire()
+					print(self.my_master.unregisterSubscriber(node.node_name, topic_name, node.node_uri))
+					self._lock.release()
+				# UNSERVICE
+				for service_name in node.services.keys():
+					## unregisterService(NODE_NAME, SERVICE_NAME, SERVICE_URI)
+					self._lock.acquire()
+					print(self.my_master.unregisterService(node.node_name, service_name, node.services[service_name]))
+					self._lock.release()
+
 	'''
 	* TCP CONNECTION RECEIVER
 	'''
-	def registration_receive_thread(self):
+	def tcp_connection_receive_thread(self):
 		while True:
 			clientsock, addr = self.ursock.accept()
 			member = addr[0].split('.')[3]
@@ -230,9 +265,20 @@ class StateFinder(object):
 				self.client_socks[key].send(payload)
 			except Exception as e:
 				print('** Exception (tcp destination address - ' + self.mask + key + ') : ' + str(e))
+				print('** This transmission is failed temporarily. Because this master and target master have been connected well. The target master is still our member but unreachable.\n')
 
-			# TODO : UPDATE MEMBER LIST OF ALL MASTERS (DELETE MEMBER)
+				# TODO : UPDATE MEMBER LIST OF ALL MASTERS (DELETE MEMBER)
+				# self.client_socks[key].close()
+				# del self.client_socks[key]
+				# self.members.remove(key)
 
+				# print(self.members)
+				
+
+	'''
+	* CHECK THE LOCAL STATE PERIODICALLY (INTERVAL : 1 SEC)
+	* SEND MESSAGES WHEN NEW STATES ARE DISCOVERED
+	'''
 	def state_finder_thread(self):
 		'''
 		* GETTING LIST OF NODES IN THIS MASTER INCLUDING OTHER NODES OBTAINED FROM OTHER MASTERS
@@ -355,29 +401,29 @@ class StateFinder(object):
 						data = ['service', service_node, service_name, service_uri, self.nodes[service_node].node_uri]
 						self.sendAll(pickle.dumps(data))
 
-		self.t0 = threading.Timer(self.timer_interval, self.state_finder_thread)
-		self.t0.daemon = True
-		self.t0.start()
+		self.t2 = threading.Timer(self.timer_interval, self.state_finder_thread)
+		self.t2.daemon = True
+		self.t2.start()
 
 	def start(self, arg):
-		self.thread_resml = threading.Thread(target=self.response_member_list)
-		self.thread_regrt = threading.Thread(target=self.registration_receive_thread)
-		self.thread_resml.daemon = True
-		self.thread_regrt.daemon = True
-		self.thread_resml.start()
-		self.thread_regrt.start()
+		self.t0 = threading.Thread(target=self.mcast_receive_thread)
+		self.t1 = threading.Thread(target=self.tcp_connection_receive_thread)
+		self.t0.daemon = True
+		self.t1.daemon = True
+		self.t0.start()
+		self.t1.start()
 
 		if arg == '--root':
 			self.members.append(self.local_ip.split('.')[3])
 
-			self.thread_sft = threading.Thread(target=self.state_finder_thread)
-			self.thread_sft.daemon = True
-			self.thread_sft.start()
+			self.t2 = threading.Thread(target=self.state_finder_thread)
+			self.t2.daemon = True
+			self.t2.start()
 
 		else:
-			self.thread_reqml = threading.Thread(target=self.request_member_list)
-			self.thread_reqml.daemon = True
-			self.thread_reqml.start()
+			self.ct0 = threading.Thread(target=self.root_finder_thread)
+			self.ct0.daemon = True
+			self.ct0.start()
 
 	def stop(self):
 		print('\n\n * Terminated.')
