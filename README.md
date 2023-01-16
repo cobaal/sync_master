@@ -9,5 +9,6 @@ cd ~/catkin_ws
 catkin_make
 
 rospack depends1 sync_master
-rosrun sync_master sync_master_node
+[udp, multicast] rosrun sync_master sync_master_node
+[tcp, unicast] rosrun sync_master tcp_sync_master_node [option: --root]
 ~~~
