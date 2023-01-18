@@ -9,8 +9,8 @@ sudo chmod +x ~/catkin_ws/src/sync_master/nodes/tcp_sync_master_node
 cd ~/catkin_ws
 catkin_make
 
-source devel/setup.bash
-source devel/setup.sh
+source ~/catkin_ws/devel/setup.bash
+source ~/catkin_ws/devel/setup.sh
 
 rospack depends1 sync_master
 [udp, multicast] rosrun sync_master sync_master_node
