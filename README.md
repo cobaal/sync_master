@@ -16,3 +16,9 @@ rospack depends1 sync_master
 [udp, multicast] rosrun sync_master sync_master_node
 [tcp, unicast] rosrun sync_master tcp_sync_master_node [option: --root]
 ~~~
+
+# ERROR
+1. IOError: [Errno 13] Permission denied: '~/.ros/log/{NODE NAME}.log'
+~~~
+rm ~/.ros/log/{NODE NAME}.log
+~~~
