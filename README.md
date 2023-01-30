@@ -22,3 +22,7 @@ rospack depends1 sync_master
 ~~~
 rm ~/.ros/log/{NODE NAME}.log
 ~~~
+2. error: [Errno 19] No such device (multicast socket)
+~~~
+ip route add default via {ip} dev {iface}
+~~~
