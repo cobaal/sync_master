@@ -1,4 +1,4 @@
-# sync_master
+# Install
 
 ~~~
 mkdir -p ~/catkin_ws/src
@@ -13,8 +13,6 @@ source ~/catkin_ws/devel/setup.bash
 source ~/catkin_ws/devel/setup.sh
 
 rospack depends1 sync_master
-[udp, multicast] rosrun sync_master sync_master_node
-[tcp, unicast] rosrun sync_master tcp_sync_master_node [option: --root]
 ~~~
 
 # ERROR
@@ -26,3 +24,47 @@ rm ~/.ros/log/{NODE NAME}.log
 ~~~
 ip route add default via {ip} dev {iface}
 ~~~
+
+# How to use (TCP: default)
+Com A (root)
+~~~
+echo 'export ROS_HOSTNAME={IP_of_this_com_A}' >> ~/.bashrc
+echo 'export ROS_MASTER_URI=http://{IP_of_this_com_A}:11311' >> ~/.bashrc
+source ~/.bashrc
+
+(new terminal) roscore
+(new terminal) rosrun sync_master tcp_sync_master_node --root
+~~~
+
+Com B (non-root)
+~~~
+echo 'export ROS_HOSTNAME={IP_of_this_com_B}' >> ~/.bashrc
+echo 'export ROS_MASTER_URI=http://{IP_of_this_com_B}:11311' >> ~/.bashrc
+source ~/.bashrc
+
+(new terminal) roscore
+(new terminal) rosrun sync_master tcp_sync_master_node
+~~~
+There must be exactly one root. It doesn't matter if non-root execute first.
+
+# How to use (UDP)
+Com A 
+~~~
+echo 'export ROS_HOSTNAME={IP_of_this_com_A}' >> ~/.bashrc
+echo 'export ROS_MASTER_URI=http://{IP_of_this_com_A}:11311' >> ~/.bashrc
+source ~/.bashrc
+
+(new terminal) roscore
+(new terminal) rosrun sync_master sync_master_node
+~~~
+
+Com B
+~~~
+echo 'export ROS_HOSTNAME={IP_of_this_com_B}' >> ~/.bashrc
+echo 'export ROS_MASTER_URI=http://{IP_of_this_com_B}:11311' >> ~/.bashrc
+source ~/.bashrc
+
+(new terminal) roscore
+(new terminal) rosrun sync_master sync_master_node
+~~~
+UDP manner has no root.
